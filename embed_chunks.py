@@ -1,3 +1,4 @@
+```python
 #!/usr/bin/env python3
 import os
 # Disable TensorFlow components in transformers to avoid tf-keras issues
@@ -12,21 +13,22 @@ from transformers import AutoTokenizer, AutoModel
 
 
 def main():
-    # 1) Başlatma: timeout ve bellek ayarları
+    # Initialize Spark with tuned memory and core settings
     spark = (
         SparkSession.builder
         .appName("DistributedRAG-Embeddings")
         .config("spark.network.timeout", "800s")
         .config("spark.executor.heartbeatInterval", "60s")
-        .config("spark.executor.memory", "6g")       # Executor başına 6GB
-        .config("spark.executor.cores", "4")        # Executor başına 4 çekirdek
+        .config("spark.executor.memory", "5g")            # Executor başına 5GB RAM
+        .config("spark.yarn.executor.memoryOverhead", "512")  # Overhead 512MB
+        .config("spark.executor.cores", "4")               # Executor başına 4 çekirdek
         .getOrCreate()
     )
 
-    # 2) Modeli init-action ile node'lara kopyalamıştık
+    # Model path from init-action
     LOCAL_MODEL_PATH = "/mnt/data/models/all-MiniLM-L6-v2"
 
-    # 3) Tokenizer ve model, yerelde yüklü dosyalardan
+    # Load tokenizer and model locally
     tokenizer = AutoTokenizer.from_pretrained(
         LOCAL_MODEL_PATH,
         local_files_only=True
@@ -37,7 +39,6 @@ def main():
     )
     model.eval()
 
-    # 4) Pandas UDF: batch embedding
     @pandas_udf(ArrayType(FloatType()))
     def embed_batch(texts: pd.Series) -> pd.Series:
         enc = tokenizer(
@@ -51,14 +52,14 @@ def main():
             embs = model(**enc).last_hidden_state.mean(dim=1)
         return pd.Series(embs.cpu().numpy().tolist())
 
-    # 5) GCS yolları
+    # GCS paths
     input_path = "gs://my-wiki-bucket/chunks/"
     output_path = "gs://my-wiki-bucket/embeddings_parquet/"
 
-    # 6) Bölüm sayısını cluster paralelliğine göre ayarla
+    # Partition count = total vCPU in cluster
     num_partitions = spark.sparkContext.defaultParallelism
 
-    # 7) Okuma, partition, embed, yazma (Parquet)
+    # Read, embed, write as Parquet
     df = spark.read.json(input_path).repartition(num_partitions)
     df_emb = df.withColumn("embedding", embed_batch(df.chunk_text))
     df_emb.write.mode("overwrite").parquet(output_path)
@@ -68,3 +69,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+```
