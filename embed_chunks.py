@@ -47,8 +47,8 @@ def main():
         .appName("DistributedRAG-Embeddings")
         .config("spark.network.timeout", "1000s")
         .config("spark.executor.heartbeatInterval", "300s")
-        .config("spark.executor.memory", "8g")
-        .config("spark.executor.memoryOverhead", "2g")
+        .config("spark.executor.memory", "4g")             # ↓ düşürüldü
+        .config("spark.executor.memoryOverhead", "1g")     # ↓ düşürüldü
         .config("spark.executor.cores", "4")
         .getOrCreate()
     )
