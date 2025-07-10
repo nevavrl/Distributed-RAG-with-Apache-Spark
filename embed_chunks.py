@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import os
 # Disable TensorFlow components in transformers to avoid tf-keras issues
-ios.environ["TRANSFORMERS_NO_TF"] = "1"
+os.environ["TRANSFORMERS_NO_TF"] = "1"
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import pandas_udf
