@@ -1,21 +1,31 @@
 #!/bin/bash
 
+set -euxo pipefail  # Hataları erkenden yakalamak için
+
 # -----------------------------
-# Torch ve Transformers kurulumu (GCS'ten .whl ile)
+# Torch, Transformers ve Sentence-Transformers kurulumu (offline wheel ile)
 # -----------------------------
 
-# GCS'ten indirilecek dizin
 mkdir -p /opt/torch_cache
-
-# GCS'ten tüm wheel dosyalarını indir
 gsutil -m cp gs://my-wiki-bucket/torch_wheels/* /opt/torch_cache/
 
-# Offline pip kurulumu (internet yokken bile çalışır)
-pip install --no-index --find-links=/opt/torch_cache torch==2.3.0 transformers==4.41.1
+# Gerekli paketleri offline kur (internet gerekmeden)
+pip install --no-index --find-links=/opt/torch_cache \
+    torch==2.3.0 \
+    transformers==4.41.1 \
+    sentence-transformers==2.7.0 \
+    pandas \
+    pyarrow
 
 # -----------------------------
-# Modeli GCS'ten indir (embedding için)
+# Model klasörü: all-MiniLM-L6-v2
 # -----------------------------
 
 mkdir -p /mnt/data/models
 gsutil -m cp -r gs://my-wiki-bucket/models/all-MiniLM-L6-v2 /mnt/data/models/
+
+# -----------------------------
+# Bilgi mesajı
+# -----------------------------
+
+echo "✅ Init action completed successfully."
