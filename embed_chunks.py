@@ -73,7 +73,7 @@ def main():
     df_emb = df.mapInPandas(embed_partition, schema=schema.add("embedding", ArrayType(FloatType())))
 
     # Write to GCS
-    df_emb.write.mode("overwrite").parquet(output_path)
+    df_emb.coalesce(5).write.mode("overwrite").parquet(output_path)
 
     spark.stop()
 
