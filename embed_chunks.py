@@ -1,4 +1,3 @@
-```python
 #!/usr/bin/env python3
 import os
 # Disable TensorFlow components in transformers to avoid tf-keras issues
@@ -69,4 +68,4 @@ def main():
 
 if __name__ == "__main__":
     main()
-```
+
