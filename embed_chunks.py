@@ -1,66 +1,78 @@
 #!/usr/bin/env python3
 import os
-# Disable TensorFlow components in transformers to avoid tf-keras issues
-os.environ["TRANSFORMERS_NO_TF"] = "1"
-
-from pyspark.sql import SparkSession
-from pyspark.sql.functions import pandas_udf
-from pyspark.sql.types import ArrayType, FloatType
 import pandas as pd
 import torch
 from transformers import AutoTokenizer, AutoModel
+from pyspark.sql import SparkSession
+from pyspark.sql.types import StructType, StructField, StringType, ArrayType, FloatType
+
+# TF disable
+os.environ["TRANSFORMERS_NO_TF"] = "1"
 
 
-def main():
-    # Initialize Spark with tuned memory and core settings
-    spark = (
-        SparkSession.builder
-        .appName("DistributedRAG-Embeddings")
-        .config("spark.network.timeout", "800s")
-        .config("spark.executor.heartbeatInterval", "60s")
-        .config("spark.executor.memory", "5g")            # Executor başına 5GB RAM
-        .config("spark.yarn.executor.memoryOverhead", "512")  # Overhead 512MB
-        .config("spark.executor.cores", "4")               # Executor başına 4 çekirdek
-        .getOrCreate()
-    )
-
-    # Model path from init-action
+def embed_partition(pdf_iter):
+    # Model path (init-action ile indirildi)
     LOCAL_MODEL_PATH = "/mnt/data/models/all-MiniLM-L6-v2"
 
-    # Load tokenizer and model locally
-    tokenizer = AutoTokenizer.from_pretrained(
-        LOCAL_MODEL_PATH,
-        local_files_only=True
-    )
-    model = AutoModel.from_pretrained(
-        LOCAL_MODEL_PATH,
-        local_files_only=True
-    )
+    # Model ve tokenizer her partition'da yüklenir
+    tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_PATH, local_files_only=True)
+    model = AutoModel.from_pretrained(LOCAL_MODEL_PATH, local_files_only=True)
     model.eval()
 
-    @pandas_udf(ArrayType(FloatType()))
-    def embed_batch(texts: pd.Series) -> pd.Series:
+    for pdf in pdf_iter:
+        texts = pdf["chunk_text"].tolist()
+
+        # Tokenize
         enc = tokenizer(
-            texts.tolist(),
+            texts,
             padding=True,
             truncation=True,
             return_tensors="pt",
             max_length=128
         )
+
+        # Embed
         with torch.no_grad():
             embs = model(**enc).last_hidden_state.mean(dim=1)
-        return pd.Series(embs.cpu().numpy().tolist())
+
+        # Result as list of float arrays
+        pdf["embedding"] = embs.cpu().numpy().tolist()
+        yield pdf
+
+
+def main():
+    # Spark session init
+    spark = (
+        SparkSession.builder
+        .appName("DistributedRAG-Embeddings")
+        .config("spark.network.timeout", "1000s")
+        .config("spark.executor.heartbeatInterval", "300s")
+        .config("spark.executor.memory", "8g")
+        .config("spark.executor.memoryOverhead", "2g")
+        .config("spark.executor.cores", "4")
+        .getOrCreate()
+    )
 
     # GCS paths
     input_path = "gs://my-wiki-bucket/chunks/"
     output_path = "gs://my-wiki-bucket/embeddings_parquet/"
 
-    # Partition count = total vCPU in cluster
-    num_partitions = spark.sparkContext.defaultParallelism
+    # Belirli schema (örnek)
+    schema = StructType([
+        StructField("chunk_text", StringType(), True),
+        StructField("chunk_id", StringType(), True)  # varsa ek alanlar da tanımla
+    ])
 
-    # Read, embed, write as Parquet
-    df = spark.read.json(input_path).repartition(num_partitions)
-    df_emb = df.withColumn("embedding", embed_batch(df.chunk_text))
+    # Worker sayısına göre partisyon ayarla
+    num_partitions = spark.sparkContext.defaultParallelism  # Örn: 3 worker * 8 core = 24
+
+    # Load data
+    df = spark.read.schema(schema).json(input_path).repartition(num_partitions)
+
+    # Add embedding
+    df_emb = df.mapInPandas(embed_partition, schema=schema.add("embedding", ArrayType(FloatType())))
+
+    # Write to GCS
     df_emb.write.mode("overwrite").parquet(output_path)
 
     spark.stop()
@@ -68,4 +80,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
