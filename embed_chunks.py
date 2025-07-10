@@ -6,77 +6,52 @@ from transformers import AutoTokenizer, AutoModel
 from pyspark.sql import SparkSession
 from pyspark.sql.types import StructType, StructField, StringType, ArrayType, FloatType
 
-# TF disable
+# Disable TensorFlow in transformers
 os.environ["TRANSFORMERS_NO_TF"] = "1"
 
-
 def embed_partition(pdf_iter):
-    # Model path (init-action ile indirildi)
     LOCAL_MODEL_PATH = "/mnt/data/models/all-MiniLM-L6-v2"
-
-    # Model ve tokenizer her partition'da yüklenir
     tokenizer = AutoTokenizer.from_pretrained(LOCAL_MODEL_PATH, local_files_only=True)
     model = AutoModel.from_pretrained(LOCAL_MODEL_PATH, local_files_only=True)
     model.eval()
 
     for pdf in pdf_iter:
         texts = pdf["chunk_text"].tolist()
-
-        # Tokenize
-        enc = tokenizer(
-            texts,
-            padding=True,
-            truncation=True,
-            return_tensors="pt",
-            max_length=128
-        )
-
-        # Embed
+        enc = tokenizer(texts, padding=True, truncation=True, return_tensors="pt", max_length=128)
         with torch.no_grad():
             embs = model(**enc).last_hidden_state.mean(dim=1)
-
-        # Result as list of float arrays
         pdf["embedding"] = embs.cpu().numpy().tolist()
         yield pdf
 
-
 def main():
-    # Spark session init
     spark = (
         SparkSession.builder
         .appName("DistributedRAG-Embeddings")
         .config("spark.network.timeout", "1000s")
         .config("spark.executor.heartbeatInterval", "300s")
-        .config("spark.executor.memory", "4g")             # ↓ düşürüldü
-        .config("spark.executor.memoryOverhead", "1g")     # ↓ düşürüldü
+        .config("spark.executor.memory", "4g")
+        .config("spark.executor.memoryOverhead", "1g")
         .config("spark.executor.cores", "4")
         .getOrCreate()
     )
 
-    # GCS paths
     input_path = "gs://my-wiki-bucket/chunks/"
-    output_path = "gs://my-wiki-bucket/embeddings_parquet/"
+    local_output_path = "file:///tmp/embeddings_parquet"  # Local disk on driver node
 
-    # Belirli schema (örnek)
     schema = StructType([
         StructField("chunk_text", StringType(), True),
-        StructField("chunk_id", StringType(), True)  # varsa ek alanlar da tanımla
+        StructField("chunk_id", StringType(), True)
     ])
 
-    # Worker sayısına göre partisyon ayarla
-    num_partitions = spark.sparkContext.defaultParallelism  # Örn: 3 worker * 8 core = 24
-
-    # Load data
+    num_partitions = spark.sparkContext.defaultParallelism
     df = spark.read.schema(schema).json(input_path).repartition(num_partitions)
 
-    # Add embedding
     df_emb = df.mapInPandas(embed_partition, schema=schema.add("embedding", ArrayType(FloatType())))
 
-    # Write to GCS
-    df_emb.coalesce(5).write.mode("overwrite").parquet(output_path)
+    # Write to driver node's local disk (single output file)
+    df_emb.coalesce(1).write.mode("overwrite").parquet(local_output_path)
 
     spark.stop()
-
 
 if __name__ == "__main__":
     main()
