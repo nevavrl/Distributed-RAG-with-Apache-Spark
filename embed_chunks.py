@@ -36,7 +36,7 @@ def main():
     )
 
     input_path = "gs://my-wiki-bucket/chunks/"
-    local_output_path = "file:///tmp/embeddings_parquet"  # Local disk on driver node
+    output_path = "gs://my-wiki-bucket/embeddings_parquet"
 
     schema = StructType([
         StructField("chunk_text", StringType(), True),
@@ -48,8 +48,8 @@ def main():
 
     df_emb = df.mapInPandas(embed_partition, schema=schema.add("embedding", ArrayType(FloatType())))
 
-    # Write to driver node's local disk (single output file)
-    df_emb.coalesce(1).write.mode("overwrite").parquet(local_output_path)
+    # Parallel write to GCS — no coalesce
+    df_emb.write.mode("overwrite").parquet(output_path)
 
     spark.stop()
 
