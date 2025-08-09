@@ -1,0 +1,14 @@
+# Core
+pandas
+numpy
+tqdm
+datasets
+transformers
+torch
+faiss-cpu       
+requests
+
+# Spark
+pyspark
+
+
